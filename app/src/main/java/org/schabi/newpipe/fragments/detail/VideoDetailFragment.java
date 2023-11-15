@@ -119,10 +119,7 @@ import org.schabi.newpipe.util.external_communication.ShareUtils;
 import org.schabi.newpipe.util.PlayButtonHelper;
 
 import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedList;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -417,7 +414,6 @@ public final class VideoDetailFragment
         if (activity.isFinishing()) {
             playQueue = null;
             currentInfo = null;
-            stack = new LinkedList<>();
         }
     }
 
@@ -667,16 +663,6 @@ public final class VideoDetailFragment
         }
     }
 
-    /*//////////////////////////////////////////////////////////////////////////
-    // OwnStack
-    //////////////////////////////////////////////////////////////////////////*/
-
-    /**
-     * Stack that contains the "navigation history".<br>
-     * The peek is the current video.
-     */
-    private static LinkedList<StackItem> stack = new LinkedList<>();
-
     @Override
     public boolean onKeyDown(final int keyCode) {
         return isPlayerAvailable()
@@ -700,26 +686,7 @@ public final class VideoDetailFragment
             return true;
         }
 
-        // If we have something in history of played items we replay it here
-        if (isPlayerAvailable()
-                && player.getPlayQueue() != null
-                && player.videoPlayerSelected()
-                && player.getPlayQueue().previous()) {
-            return true; // no code here, as previous() was used in the if
-        }
-
-        // That means that we are on the start of the stack,
-        if (stack.size() <= 1) {
-            restoreDefaultOrientation();
-            return false; // let MainActivity handle the onBack (e.g. to minimize the mini player)
-        }
-
-        // Remove top
-        stack.pop();
-        // Get stack item from the new top
-        setupFromHistoryItem(Objects.requireNonNull(stack.peek()));
-
-        return true;
+        return false;
     }
 
     private void setupFromHistoryItem(final StackItem item) {
@@ -822,7 +789,7 @@ public final class VideoDetailFragment
             currentWorker.dispose();
         }
 
-        runWorker(forceLoad, stack.isEmpty());
+        runWorker(forceLoad);
     }
 
     private void startLoading(final boolean forceLoad, final boolean addToBackStack) {
@@ -834,10 +801,10 @@ public final class VideoDetailFragment
             currentWorker.dispose();
         }
 
-        runWorker(forceLoad, addToBackStack);
+        runWorker(forceLoad);
     }
 
-    private void runWorker(final boolean forceLoad, final boolean addToBackStack) {
+    private void runWorker(final boolean forceLoad) {
         final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(activity);
         currentWorker = ExtractorHelper.getStreamInfo(serviceId, url, forceLoad)
                 .subscribeOn(Schedulers.io())
@@ -851,16 +818,6 @@ public final class VideoDetailFragment
                     } else {
                         handleResult(result);
                         showContent();
-                        if (addToBackStack) {
-                            if (playQueue == null) {
-                                playQueue = new SinglePlayQueue(result);
-                            }
-                            if (stack.isEmpty() || !stack.peek().getPlayQueue()
-                                    .equalStreams(playQueue)) {
-                                stack.push(new StackItem(serviceId, url, title, playQueue));
-                            }
-                        }
-
                         if (isAutoplayEnabled()) {
                             openVideoPlayerAutoFullscreen();
                         }
@@ -1738,29 +1695,6 @@ public final class VideoDetailFragment
                     event -> updateOverlayPlayQueueButtonVisibility()
             );
         }
-
-        // This should be the only place where we push data to stack.
-        // It will allow to have live instance of PlayQueue with actual information about
-        // deleted/added items inside Channel/Playlist queue and makes possible to have
-        // a history of played items
-        @Nullable final StackItem stackPeek = stack.peek();
-        if (stackPeek != null && !stackPeek.getPlayQueue().equalStreams(queue)) {
-            @Nullable final PlayQueueItem playQueueItem = queue.getItem();
-            if (playQueueItem != null) {
-                stack.push(new StackItem(playQueueItem.getServiceId(), playQueueItem.getUrl(),
-                        playQueueItem.getTitle(), queue));
-                return;
-            } // else continue below
-        }
-
-        @Nullable final StackItem stackWithQueue = findQueueInStack(queue);
-        if (stackWithQueue != null) {
-            // On every MainPlayer service's destroy() playQueue gets disposed and
-            // no longer able to track progress. That's why we update our cached disposed
-            // queue with the new one that is active and have the same history.
-            // Without that the cached playQueue will have an old recovery position
-            stackWithQueue.setPlayQueue(queue);
-        }
     }
 
     @Override
@@ -1799,14 +1733,6 @@ public final class VideoDetailFragment
 
     @Override
     public void onMetadataUpdate(final StreamInfo info, final PlayQueue queue) {
-        final StackItem item = findQueueInStack(queue);
-        if (item != null) {
-            // When PlayQueue can have multiple streams (PlaylistPlayQueue or ChannelPlayQueue)
-            // every new played stream gives new title and url.
-            // StackItem contains information about first played stream. Let's update it here
-            item.setTitle(info.getName());
-            item.setUrl(info.getUrl());
-        }
         // They are not equal when user watches something in popup while browsing in fragment and
         // then changes screen orientation. In that case the fragment will set itself as
         // a service listener and will receive initial call to onMetadataUpdate()
@@ -2073,20 +1999,6 @@ public final class VideoDetailFragment
         return url == null;
     }
 
-    @Nullable
-    private StackItem findQueueInStack(final PlayQueue queue) {
-        StackItem item = null;
-        final Iterator<StackItem> iterator = stack.descendingIterator();
-        while (iterator.hasNext()) {
-            final StackItem next = iterator.next();
-            if (next.getPlayQueue().equalStreams(queue)) {
-                item = next;
-                break;
-            }
-        }
-        return item;
-    }
-
     private void replaceQueueIfUserConfirms(final Runnable onAllow) {
         @Nullable final PlayQueue activeQueue = isPlayerAvailable() ? player.getPlayQueue() : null;
 
@@ -2201,7 +2113,6 @@ public final class VideoDetailFragment
      * */
     private void cleanUp() {
         // New beginning
-        stack.clear();
         if (currentWorker != null) {
             currentWorker.dispose();
         }
